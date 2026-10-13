@@ -145,11 +145,12 @@ function msgHTML(m,i){
   if(m.imgs&&m.imgs.length)media+=m.imgs.map((u,j)=>`<img src="${u}" alt="صورة مولّدة"><a class="dl" href="${u}" download="odai-${m.id}-${j+1}.png">${ic('download')}تنزيل الصورة</a>`).join('');
   if(m.blob&&m.k==='video')media+=`<video controls playsinline src="${blobUrl(m)}"></video><a class="dl" href="${blobUrl(m)}" download="odai-${m.id}.mp4">${ic('download')}تنزيل الفيديو</a>`;
   if(m.blob&&m.k==='audio')media+=`<audio controls src="${blobUrl(m)}"></audio><a class="dl" href="${blobUrl(m)}" download="odai-${m.id}.${m.blob.type==='audio/mpeg'?'mp3':'wav'}">${ic('download')}تنزيل الصوت</a>`;
-  const think=m.reasoning?`<details class="think" ${m.streaming&&!m.text?'open':''}><summary>${ic('bulb')}التفكير</summary><div class="tbody" dir="auto">${esc(m.reasoning)}</div></details>`:'';
+  const think=m.reasoning&&!m.agent?`<details class="think" ${m.streaming&&!m.text?'open':''}><summary>${ic('bulb')}التفكير</summary><div class="tbody" dir="auto">${esc(m.reasoning)}</div></details>`:'';
   const status=m.streaming&&(m.status||(!m.text&&!m.reasoning))?`<div class="status"><span class="dot"></span>${esc(m.status||'جارٍ الكتابة…')}</div>`:'';
-  const files=m.artifacts||[],artifacts=files.length?`<section class="artifact-panel"><div class="artifact-title"><strong>ملفات المشروع (${files.length})</strong><button class="btn sm" data-agent-zip>تنزيل ZIP</button></div>${files.map((f,j)=>`<div class="artifact-row"><span dir="auto">${ic('file')}${esc(f.path)}</span><button class="btn sm" data-agent-file="${j}">${ic('download')}تنزيل</button></div>`).join('')}</section>`:'';
+  const log=m.agentLog||[],trace=log.length?`<details class="agent-trace" ${m.streaming?'open':''}><summary>سجل نشاط الوكيل (${log.length})</summary><ol>${log.map(x=>`<li><time>${new Date(x.ts).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}</time><span>${esc(x.text)}</span></li>`).join('')}</ol></details>`:'';
+  const files=m.artifacts||[],hasHtml=files.some(f=>/\.html?$/i.test(f.path)),artifacts=files.length?`<section class="artifact-panel"><div class="artifact-title"><strong>المشروع (${files.length} ملف)</strong><div class="project-actions">${hasHtml?`<button class="btn sm" data-agent-preview>${ic('image')}معاينة</button>`:''}<button class="btn sm" data-agent-zip>${ic('download')}تنزيل ZIP</button></div></div><details class="project-files"><summary>عرض ملفات المشروع</summary>${files.map((f,j)=>`<div class="artifact-row"><span dir="auto">${ic('file')}${esc(f.path)}</span><button class="btn sm" data-agent-code="${j}">عرض الكود</button></div>`).join('')}</details></section>`:'';
   const acts=m.streaming?'':`<div class="acts"><button class="ic" data-act="copy" aria-label="نسخ">${ic('copy')}</button>${last?`<button class="ic" data-act="regen" aria-label="إعادة التوليد">${ic('refresh')}</button>`:''}<button class="ic" data-act="del" aria-label="حذف الرسالة">${ic('trash')}</button>${m.cost?`<small>${money(m.cost)}</small>`:''}</div>`;
-  return `<div class="msg a" data-i="${i}"><div class="who"><span>${esc(getModel(m.model).name)}</span><i></i></div>${think}${status}<div class="body md" dir="auto">${m.err?`<div class="err">${esc(m.err)}</div>`:''}<div class="media">${media}</div>${m.text?md(m.text):''}${artifacts}</div>${srcHTML(m)}${acts}</div>`}
+  return `<div class="msg a" data-i="${i}"><div class="who"><span>${esc(getModel(m.model).name)}</span><i></i></div>${think}${status}${trace}<div class="body md" dir="auto">${m.err?`<div class="err">${esc(m.err)}</div>`:''}<div class="media">${media}</div>${m.text?md(m.text):''}${artifacts}</div>${srcHTML(m)}${acts}</div>`}
 
 function renderThread(){
   if(!cur.msgs.length){
@@ -171,6 +172,13 @@ function modal(html,cls=''){closeModal();const r=document.createElement('div');r
 const closeModal=()=>{$('#mr').innerHTML=''};
 const closeViewer=()=>{const v=document.querySelector('.viewer');if(v)v.remove()};
 addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();closeViewer()}});
+
+function openAgentCode(files,index){const f=files[index];if(!f)return;const sh=modal(`<div class="mh"><span dir="auto">${esc(f.path)}</span><button class="ic" data-x aria-label="إغلاق">${ic('x')}</button></div><pre class="agent-code"><code></code></pre><div class="agent-code-actions"><button class="btn" data-agent-copy-code>نسخ الكود</button></div>`,'agent-code-sheet');sh.querySelector('code').textContent=f.content;sh.querySelector('[data-agent-copy-code]').onclick=()=>copy(f.content)}
+function projectRef(entry,ref){if(!ref||/^(?:[a-z]+:|\/\/|#|data:|blob:)/i.test(ref))return null;try{const base=new URL(entry,'https://odai-preview.invalid/'),u=new URL(ref,base);if(u.origin!==base.origin)return null;return decodeURIComponent(u.pathname.slice(1))}catch{return null}}
+function openAgentPreview(files){const entry=files.find(x=>/(^|\/)index\.html?$/i.test(x.path))||files.find(x=>/\.html?$/i.test(x.path));if(!entry){toast('لا يوجد ملف HTML لمعاينته');return}const lookup=new Map(files.map(x=>[x.path,x])),doc=new DOMParser().parseFromString(entry.content,'text/html');
+  for(const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]){const f=lookup.get(projectRef(entry.path,link.getAttribute('href')));if(f){const style=doc.createElement('style');style.textContent=f.content;link.replaceWith(style)}}
+  for(const old of [...doc.querySelectorAll('script[src]')]){const f=lookup.get(projectRef(entry.path,old.getAttribute('src')));if(f){const script=doc.createElement('script');for(const at of [...old.attributes])if(at.name!=='src')script.setAttribute(at.name,at.value);script.textContent=f.content;old.replaceWith(script)}}
+  const sh=modal(`<div class="mh"><span>معاينة الموقع — ${esc(entry.path)}</span><button class="ic" data-x aria-label="إغلاق">${ic('x')}</button></div><div class="preview-note">معاينة معزولة عن بيانات التطبيق. استخدم ZIP إذا أردت تنزيل ملفات المشروع.</div><div class="agent-preview-frame"><iframe title="معاينة المشروع" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>`,'agent-preview-sheet');sh.querySelector('iframe').srcdoc='<!doctype html>\n'+doc.documentElement.outerHTML}
 
 
 function openViewer(src){
@@ -345,13 +353,16 @@ function history(c){
 }
 
 const AGENT_TOOLS=[
+  {type:'function',function:{name:'report_progress',description:'Send a short user-facing progress update or milestone. Do not reveal private chain-of-thought; report only the action being taken or completed.',parameters:{type:'object',additionalProperties:false,properties:{message:{type:'string',description:'One concise progress update for the user, at most 180 characters'}},required:['message']}}},
   {type:'function',function:{name:'write_file',description:'Create a new project file or replace a file in the agent workspace. Use relative paths such as index.html, src/app.js, or assets/style.css. The file is downloadable by the user; do not claim it was run or published.',parameters:{type:'object',additionalProperties:false,properties:{path:{type:'string',description:'Relative file path inside this chat workspace'},content:{type:'string',description:'Complete UTF-8 file contents'}},required:['path','content']}}},
   {type:'function',function:{name:'list_files',description:'List files already present in the current chat workspace, including text files attached by the user.',parameters:{type:'object',additionalProperties:false,properties:{},required:[]}}},
   {type:'function',function:{name:'read_file',description:'Read a text file from the current chat workspace to inspect or update it.',parameters:{type:'object',additionalProperties:false,properties:{path:{type:'string',description:'Relative file path'}},required:['path']}}}
 ];
 function agentPath(v){const p=String(v||'').trim().replace(/\\/g,'/').replace(/^(\.\/)+/,'');if(!p||p.length>180||p.startsWith('/')||p.split('/').some(x=>!x||x==='.'||x==='..')||/[<>:"|?*\x00-\x1f]/.test(p))throw new Error('مسار الملف غير مسموح؛ استخدم مساراً نسبياً بسيطاً.');return p}
 function agentWorkspace(chat,a){const f={};for(const m of chat.msgs||[]){if(m.role==='user')for(const x of m.files||[])if(x.kind==='text'&&typeof x.data==='string')f[x.name]={path:x.name,content:x.data};for(const x of m.artifacts||[])if(x&&x.path&&typeof x.content==='string')f[x.path]={path:x.path,content:x.content}}for(const x of a.artifacts||[])f[x.path]={path:x.path,content:x.content};return f}
+function addAgentProgress(a,message){a.agentLog=a.agentLog||[];a.agentLog.push({ts:Date.now(),text:String(message||'').replace(/\s+/g,' ').trim().slice(0,180)});if(a.agentLog.length>40)a.agentLog.splice(0,a.agentLog.length-40)}
 function executeAgentTool(name,args,chat,a){
+  if(name==='report_progress'){const text=String(args.message||'').replace(/\s+/g,' ').trim().slice(0,180);if(!text)throw new Error('رسالة التقدم فارغة.');addAgentProgress(a,text);schedule(chat);return JSON.stringify({ok:true})}
   if(name==='list_files'){const f=agentWorkspace(chat,a);return JSON.stringify(Object.values(f).map(x=>({path:x.path,bytes:new TextEncoder().encode(x.content).length})).sort((x,y)=>x.path.localeCompare(y.path)))}
   if(name==='read_file'){const p=agentPath(args.path),x=agentWorkspace(chat,a)[p];if(!x)throw new Error('الملف غير موجود في مساحة هذه المحادثة.');if(new TextEncoder().encode(x.content).length>150000)throw new Error('الملف أكبر من حد القراءة المباشرة.');return x.content}
   if(name==='write_file'){
@@ -359,39 +370,42 @@ function executeAgentTool(name,args,chat,a){
     const f=agentWorkspace(chat,a),bytes=new TextEncoder().encode(args.content).length;if(bytes>500000)throw new Error('الحد الأقصى لحجم الملف الواحد 500 كيلوبايت.');
     if(!f[p]&&Object.keys(f).length>=20)throw new Error('تجاوز المشروع حد 20 ملفاً.');
     const total=Object.entries(f).reduce((s,[k,v])=>s+(k===p?0:new TextEncoder().encode(v.content).length),0)+bytes;if(total>2000000)throw new Error('تجاوز مجموع الملفات حد 2 ميغابايت.');
-    a.artifacts=a.artifacts||[];const i=a.artifacts.findIndex(x=>x.path===p),item={path:p,content:args.content};if(i>=0)a.artifacts[i]=item;else a.artifacts.push(item);persist(chat);schedule(chat);return JSON.stringify({ok:true,path:p,bytes,message:'تم حفظ الملف في مساحة هذه المحادثة، ويمكن للمستخدم تنزيله.'})
+    f[p]={path:p,content:args.content};a.artifacts=Object.values(f);persist(chat);schedule(chat);return JSON.stringify({ok:true,path:p,bytes,message:'تم حفظ الملف في مساحة هذه المحادثة، ويمكن للمستخدم تنزيله.'})
   }
   throw new Error('الأداة المطلوبة غير متاحة.');
 }
 async function runAgentText(chat,a,mod){
-  const messages=history(chat),instruction='أنت وكيل تنفيذ داخل تطبيق odAi. عند طلب برمجة أو إنشاء مشروع، أنشئ الملفات الفعلية باستخدام write_file ولا تكتف بعرض الشيفرة في النص. أنشئ بنية مشروع عملية مع README عند الحاجة. قبل تعديل ملفات موجودة، استخدم list_files وread_file. الملفات تحفظ داخل مساحة هذه المحادثة فقط ويمكن للمستخدم تنزيلها، ولا تدّع تشغيلها أو نشرها أو الوصول إلى جهاز المستخدم. لا تنفذ أوامر نظام ولا تطلب أسراراً. بعد إنشاء الملفات اشرح بإيجاز ما أنشأته وكيفية تشغيله.';
+  const messages=history(chat),instruction='أنت وكيل تنفيذ داخل تطبيق odAi. تحدث دائماً باللغة العربية الفصحى في تحديثات التقدم والرد النهائي ما دام المستخدم يتحدث بالعربية. ابدأ باستدعاء report_progress بخطة موجزة من خطوة أو خطوتين. حدّث المستخدم عبر report_progress عند إنجاز مرحلة مهمة، من دون كشف التفكير الداخلي. عند طلب برمجة أو إنشاء مشروع، أنشئ الملفات الفعلية باستخدام write_file ولا تكتف بعرض الشيفرة في النص. أنشئ بنية مشروع عملية مع README عند الحاجة. قبل تعديل ملفات موجودة، استخدم list_files وread_file. الملفات تحفظ داخل مساحة هذه المحادثة فقط ويمكن للمستخدم تنزيلها، ولا تدّع تشغيلها أو نشرها أو الوصول إلى جهاز المستخدم. لا تنفذ أوامر نظام ولا تطلب أسراراً. بعد إنشاء الملفات اشرح بإيجاز ما أنشأته وكيفية تشغيله.';
   if(messages[0]&&messages[0].role==='system')messages[0].content+='\n\n'+instruction;else messages.unshift({role:'system',content:instruction});
-  let toolCount=0;
+  let toolCount=0;addAgentProgress(a,'بدأ الوكيل العمل على الطلب.');
   for(let round=0;round<10;round++){
-    a.status=round?'الوكيل ينفذ الأدوات ويتابع…':'الوكيل يخطط وينشئ الملفات…';schedule(chat);
+    a.status=round?`الوكيل ينفذ الخطوة ${round+1}…`:'الوكيل يخطط ويرسل الطلب…';schedule(chat);
     const body={model:mod.id,messages,stream:true,usage:{include:true},tools:AGENT_TOOLS,tool_choice:'auto',parallel_tool_calls:false};
     const lv=chat.reasoning;if(lv==='off')body.reasoning={enabled:false};else if(lv!=='auto')body.reasoning={effort:lv};
     if(cfg.temp!=='')body.temperature=+cfg.temp;if(cfg.maxTok)body.max_tokens=+cfg.maxTok;if(chat.web)body.plugins=[{id:'web'}];
-    const res=await fetch(API+'/chat/completions',{method:'POST',headers:hdr(),body:JSON.stringify(body),signal:ctl.signal});if(!res.ok){const err=await apiError(res);if(/tool|function/i.test(err.message||''))throw new Error('النموذج المختار لا يدعم استدعاء الأدوات في وضع الوكيل. اختر نموذجاً يدعم Tool Calling عبر OpenRouter.');throw err}
+    const waitStarted=Date.now();let res;a.status='بانتظار رد النموذج… 0 ث';const waitTimer=setInterval(()=>{a.status=`بانتظار رد النموذج… ${Math.floor((Date.now()-waitStarted)/1000)} ث`;schedule(chat)},1000);
+    try{res=await fetch(API+'/chat/completions',{method:'POST',headers:hdr(),body:JSON.stringify(body),signal:ctl.signal})}finally{clearInterval(waitTimer)}
+    if(!res.ok){const err=await apiError(res);if(/tool|function/i.test(err.message||''))throw new Error('النموذج المختار لا يدعم استدعاء الأدوات في وضع الوكيل. اختر نموذجاً يدعم Tool Calling عبر OpenRouter.');throw err}
+    addAgentProgress(a,`وصل رد النموذج في الجولة ${round+1}؛ يجري استلامه الآن.`);a.status='وصل رد النموذج؛ جارٍ قراءة النتيجة…';schedule(chat);
     let text='',usage=0,usageSeen=false;const calls={};
-    await sse(res,j=>{
+    const streamStarted=Date.now(),streamTimer=setInterval(()=>{a.status=`يستقبل الرد… ${Math.floor((Date.now()-streamStarted)/1000)} ث`;schedule(chat)},1000);
+    try{await sse(res,j=>{
       if(j.error)throw new Error(j.error.message||'خطأ من المزوّد');
       const choice=j.choices&&j.choices[0]||{},d=choice.delta||{};
-      if(d.reasoning)a.reasoning+=d.reasoning;else if(Array.isArray(d.reasoning_details))for(const x of d.reasoning_details)if(x.text)a.reasoning+=x.text;
       if(d.content){text+=d.content;a.text+=d.content}
       for(const tc of d.tool_calls||[]){const ix=tc.index??Object.keys(calls).length,c=calls[ix]||(calls[ix]={id:'',type:'function',function:{name:'',arguments:''}});if(tc.id)c.id=tc.id;if(tc.type)c.type=tc.type;if(tc.function&&tc.function.name)c.function.name+=tc.function.name;if(tc.function&&tc.function.arguments)c.function.arguments+=tc.function.arguments}
       if(j.usage&&!usageSeen){usage=+j.usage.cost||0;usageSeen=true}
       addSources(a,d.annotations);if(j.usage||d.content||d.tool_calls)schedule(chat);
-    });
+    })}finally{clearInterval(streamTimer)}
     a.cost=(a.cost||0)+usage;
-    const batch=Object.keys(calls).sort((x,y)=>+x- +y).map(k=>calls[k]);if(!batch.length)break;for(const call of batch)if(!call.id)call.id=uid();
+    const batch=Object.keys(calls).sort((x,y)=>+x- +y).map(k=>calls[k]);if(!batch.length){addAgentProgress(a,a.artifacts&&a.artifacts.length?'اكتمل رد الوكيل؛ الملفات جاهزة للتنزيل.':'اكتمل رد الوكيل.');break}for(const call of batch)if(!call.id)call.id=uid();
     messages.push({role:'assistant',content:text||null,tool_calls:batch});
-    for(const call of batch){const id=call.id;let result;
+    for(const call of batch){const id=call.id;let result,args={};
       if(toolCount++>=24)result=JSON.stringify({error:'بلغت الجلسة الحد الآمن لاستدعاء الأدوات.'});
-      else try{const args=JSON.parse(call.function.arguments||'{}');result=executeAgentTool(call.function.name,args,chat,a)}catch(e){result=JSON.stringify({error:(e&&e.message)||'تعذر تنفيذ الأداة.'})}
+      else try{args=JSON.parse(call.function.arguments||'{}');const name=call.function.name,labels={write_file:'إنشاء أو تحديث ملف',read_file:'قراءة ملف',list_files:'استعراض الملفات'};if(name!=='report_progress'){const target=name==='write_file'?' «'+String(args.path||'').slice(0,80)+'»':'';addAgentProgress(a,(labels[name]||'تنفيذ أداة')+target+'…');a.status=(labels[name]||'تنفيذ أداة')+target;schedule(chat)}result=executeAgentTool(name,args,chat,a);if(name!=='report_progress'&&name==='write_file')addAgentProgress(a,'تم حفظ الملف «'+String(args.path||'').slice(0,80)+'».')}catch(e){const why=(e&&e.message)||'تعذر تنفيذ الأداة.';result=JSON.stringify({error:why});addAgentProgress(a,'تعذّر تنفيذ خطوة: '+why)}
       messages.push({role:'tool',tool_call_id:id,content:String(result)});schedule(chat);
     }
-    if(round===9)a.text+='\n\nتوقفت جولات الوكيل عند الحد الوقائي. الملفات التي أُنشئت متاحة للتنزيل.';
+    if(round===9){a.text+='\n\nتوقفت جولات الوكيل عند الحد الوقائي. الملفات التي أُنشئت متاحة للتنزيل.';addAgentProgress(a,'بلغ الوكيل الحد الوقائي للجولات؛ الملفات المنشأة محفوظة.')}
   }
   if(a.artifacts&&a.artifacts.length)schedule(chat);
 }
@@ -510,7 +524,7 @@ async function runVideo(chat,a,mod){
 
 async function generate(chat){
   const mod=getModel(chat.model);
-  const a={id:uid(),role:'assistant',k:mod.kind,text:'',reasoning:'',imgs:[],model:mod.id,streaming:true,ts:Date.now()};
+  const a={id:uid(),role:'assistant',k:mod.kind,agent:!!(lastUser(chat)&&lastUser(chat).agent),text:'',reasoning:'',imgs:[],model:mod.id,streaming:true,ts:Date.now()};
   chat.msgs.push(a);busy=true;ctl=new AbortController();stick=true;
   if(!chats.includes(chat))chats.unshift(chat);
   persist(chat);
@@ -518,7 +532,7 @@ async function generate(chat){
   try{
     await ({text:runText,image:runImage,video:runVideo,audio:runAudio}[mod.kind])(chat,a,mod);
   }catch(e){
-    if(e.name==='AbortError'){if(!a.text&&!a.imgs.length&&!a.blob&&!a.reasoning)chat.msgs.pop()}
+    if(e.name==='AbortError'){if(!a.text&&!a.imgs.length&&!a.blob&&!a.reasoning&&!(a.artifacts||[]).length&&!(a.agentLog||[]).length)chat.msgs.pop();else if(a.agentLog&&a.agentLog.length)addAgentProgress(a,'أوقف المستخدم المهمة؛ تم الاحتفاظ بسجلها والملفات التي اكتملت.')}
     else a.err=(e&&e.message)||String(e);
   }
   a.streaming=false;a.status='';busy=false;ctl=null;
@@ -564,7 +578,7 @@ scroller.addEventListener('scroll',()=>{stick=scroller.scrollHeight-scroller.scr
 thread.addEventListener('click',e=>{
   if(e.target.closest('[data-go]'))return openSettings();
   const vi=e.target.closest('.media img, .thumbs img');if(vi)return openViewer(vi.src);
-  const af=e.target.closest('[data-agent-file],[data-agent-zip]');if(af){const i=+af.closest('.msg').dataset.i,m=cur.msgs[i],files=m&&m.artifacts||[];if(af.hasAttribute('data-agent-zip')){if(files.length)downloadAgentFile(zipStored(files),'odai-agent-project.zip')}else{const f=files[+af.dataset.agentFile];if(f)downloadAgentFile(new Blob([f.content],{type:'text/plain;charset=utf-8'}),f.path.split('/').pop())}return}
+  const af=e.target.closest('[data-agent-code],[data-agent-preview],[data-agent-zip]');if(af){const i=+af.closest('.msg').dataset.i,m=cur.msgs[i],files=m&&m.artifacts||[];if(af.hasAttribute('data-agent-zip')){if(files.length)downloadAgentFile(zipStored(files),'odai-agent-project.zip')}else if(af.hasAttribute('data-agent-preview'))openAgentPreview(files);else openAgentCode(files,+af.dataset.agentCode);return}
   const dl=e.target.closest('[data-code-download]');if(dl){const box=dl.closest('.code'),code=box.querySelector('code').textContent,lang=(dl.dataset.lang||'').toLowerCase();
     const first=code.split(/\r?\n/).slice(0,3).join('\n'),match=first.match(/(?:filename|file|اسم الملف)\s*[:=]\s*["']?([\w.-]+\.[\w.-]+)["']?/i);
     const ext={html:'html',htm:'html',css:'css',js:'js',javascript:'js',mjs:'mjs',ts:'ts',typescript:'ts',jsx:'jsx',tsx:'tsx',py:'py',python:'py',json:'json',md:'md',markdown:'md',xml:'xml',svg:'svg',yaml:'yml',yml:'yml',sh:'sh',bash:'sh',sql:'sql',java:'java',c:'c',cpp:'cpp','c++':'cpp',cs:'cs',go:'go',rust:'rs',rs:'rs',php:'php',rb:'rb',ruby:'rb',txt:'txt'}[lang]||'txt';
