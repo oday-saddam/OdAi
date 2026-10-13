@@ -6,8 +6,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const ic=(n,c='')=>`<svg class="i ${c}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
 const money=n=>{n=+n||0;return '$'+(n===0?'0.00':n<0.01?n.toFixed(5):n<1?n.toFixed(4):n.toFixed(2))};
-const sleep=(ms,sig)=>new Promise((res,rej)=>{const t=setTimeout(res,ms);sig&&sig.addEventListener('abort',()=>{clearTimeout(t);rej(new DOMException('Aborted','AbortError'))})});
-const fetchDeadline=async(url,init={},ms=90000)=>{let timed=false;const c=new AbortController();const t=setTimeout(()=>{timed=true;c.abort()},ms);const parent=init.signal;const stop=()=>c.abort();parent&&parent.addEventListener('abort',stop,{once:true});try{return await fetch(url,{...init,signal:c.signal})}catch(e){if(timed)throw new Error('انتهت مهلة التوليد. جرّب نموذجاً أو مزوّداً آخر.');throw e}finally{clearTimeout(t);parent&&parent.removeEventListener('abort',stop)}};
+const sleep=(ms,sig)=>new Promise((res,rej)=>{if(sig&&sig.aborted)return rej(new DOMException('Aborted','AbortError'));let t;const done=()=>{sig&&sig.removeEventListener('abort',stop);res()};const stop=()=>{clearTimeout(t);sig&&sig.removeEventListener('abort',stop);rej(new DOMException('Aborted','AbortError'))};t=setTimeout(done,ms);sig&&sig.addEventListener('abort',stop,{once:true})});
 const LOGO=`<svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#23272c"/><circle cx="24" cy="24" r="9.5" fill="none" stroke="var(--ac)" stroke-width="4"/><circle cx="34.5" cy="13.5" r="3" fill="var(--ac)"/></svg>`;
 let toastT;const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2200)};
 const copy=t=>navigator.clipboard.writeText(t).then(()=>toast('تم النسخ'),()=>toast('تعذّر النسخ'));
@@ -21,7 +20,7 @@ const DB={db:null,
   del(s,id){return this.tx(s,'readwrite',st=>st.delete(id)).catch(()=>{})},
   clear(s){return this.tx(s,'readwrite',st=>st.clear()).catch(()=>{})}};
 
-const defCfg={sys:'',temp:'',maxTok:'',accent:'#22d3ee',fs:16,model:'openrouter/auto',reasoning:'auto',voice:'alloy',favs:[],limitDaily:'',smartTitle:false,titleModel:'',sttLang:'ar-EG',lastBackup:0,pin:'',pinSalt:''};
+const defCfg={sys:'',temp:'',maxTok:'',accent:'#22d3ee',fs:16,model:'openrouter/auto',reasoning:'auto',voice:'alloy',favs:[],limitDaily:'',smartTitle:false,titleModel:'',sttLang:'ar-EG',lastBackup:0,pin:'',pinSalt:'',agentMode:false};
 let cfg;try{cfg={...defCfg,...JSON.parse(localStorage.getItem('odai.cfg')||'{}')}}catch{cfg={...defCfg}}
 let KEY=localStorage.getItem('odai.key')||'';
 const saveCfg=()=>localStorage.setItem('odai.cfg',JSON.stringify(cfg));
@@ -56,7 +55,7 @@ function md(src){
   const li=/^\s*([-*+]|\d+[.)])\s+/;
   const cells=r=>r.trim().replace(/^\||\|$/g,'').split('|').map(x=>x.trim());
   while(i<L.length){const l=L[i];let m;
-    if((m=l.match(/^\u0000(\d+)\u0000$/))){flush();const [lang,c]=blocks[m[1]];out+=`<div class="code"><div class="code-h"><span>${esc(lang||'code')}</span><button data-copy>نسخ</button></div><pre><code>${hl(c,lang)}</code></pre></div>`;i++;continue}
+    if((m=l.match(/^\u0000(\d+)\u0000$/))){flush();const [lang,c]=blocks[m[1]];out+=`<div class="code"><div class="code-h"><span>${esc(lang||'code')}</span><span class="code-actions"><button data-copy>نسخ</button><button data-code-download data-lang="${esc(lang||'')}">تنزيل الملف</button></span></div><pre><code>${hl(c,lang)}</code></pre></div>`;i++;continue}
     if(/^\s*$/.test(l)){flush();i++;continue}
     if((m=l.match(/^(#{1,4})\s+(.*)$/))){flush();const n=m[1].length+1;out+=`<h${n}>${I(m[2])}</h${n}>`;i++;continue}
     if(/^\s*([-*_])\1{2,}\s*$/.test(l)){flush();out+='<hr>';i++;continue}
@@ -127,6 +126,16 @@ function renderOpts(){
   o.innerHTML=h;
 }
 
+const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+function crc32(b){let c=0xffffffff;for(const x of b)c=CRC_TABLE[(c^x)&255]^(c>>>8);return(c^0xffffffff)>>>0}
+function zipStored(files){
+  const enc=new TextEncoder(),locals=[],centrals=[];let offset=0;const d=new Date(),tm=(d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1),dt=((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate();
+  for(const f of files){const name=enc.encode(f.path),data=enc.encode(f.content),crc=crc32(data),lh=new Uint8Array(30+name.length+data.length),lv=new DataView(lh.buffer);lv.setUint32(0,0x04034b50,true);lv.setUint16(4,20,true);lv.setUint16(6,0x0800,true);lv.setUint16(8,0,true);lv.setUint16(10,tm,true);lv.setUint16(12,dt,true);lv.setUint32(14,crc,true);lv.setUint32(18,data.length,true);lv.setUint32(22,data.length,true);lv.setUint16(26,name.length,true);lv.setUint16(28,0,true);lh.set(name,30);lh.set(data,30+name.length);locals.push(lh);
+    const ch=new Uint8Array(46+name.length),cv=new DataView(ch.buffer);cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint16(8,0x0800,true);cv.setUint16(10,0,true);cv.setUint16(12,tm,true);cv.setUint16(14,dt,true);cv.setUint32(16,crc,true);cv.setUint32(20,data.length,true);cv.setUint32(24,data.length,true);cv.setUint16(28,name.length,true);cv.setUint16(30,0,true);cv.setUint16(32,0,true);cv.setUint16(34,0,true);cv.setUint16(36,0,true);cv.setUint32(38,0,true);cv.setUint32(42,offset,true);ch.set(name,46);centrals.push(ch);offset+=lh.length
+  }
+  const cd=centrals.reduce((s,x)=>s+x.length,0),end=new Uint8Array(22),v=new DataView(end.buffer);v.setUint32(0,0x06054b50,true);v.setUint16(4,0,true);v.setUint16(6,0,true);v.setUint16(8,files.length,true);v.setUint16(10,files.length,true);v.setUint32(12,cd,true);v.setUint32(16,offset,true);v.setUint16(20,0,true);return new Blob([...locals,...centrals,end],{type:'application/zip'})
+}
+function downloadAgentFile(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),5000)}
 function msgHTML(m,i){
   if(m.role==='user'){
     const im=(m.imgs&&m.imgs.length)?`<div class="thumbs">${m.imgs.map(u=>`<img src="${u}" alt="">`).join('')}</div>`:'';
@@ -138,8 +147,9 @@ function msgHTML(m,i){
   if(m.blob&&m.k==='audio')media+=`<audio controls src="${blobUrl(m)}"></audio><a class="dl" href="${blobUrl(m)}" download="odai-${m.id}.${m.blob.type==='audio/mpeg'?'mp3':'wav'}">${ic('download')}تنزيل الصوت</a>`;
   const think=m.reasoning?`<details class="think" ${m.streaming&&!m.text?'open':''}><summary>${ic('bulb')}التفكير</summary><div class="tbody" dir="auto">${esc(m.reasoning)}</div></details>`:'';
   const status=m.streaming&&(m.status||(!m.text&&!m.reasoning))?`<div class="status"><span class="dot"></span>${esc(m.status||'جارٍ الكتابة…')}</div>`:'';
+  const files=m.artifacts||[],artifacts=files.length?`<section class="artifact-panel"><div class="artifact-title"><strong>ملفات المشروع (${files.length})</strong><button class="btn sm" data-agent-zip>تنزيل ZIP</button></div>${files.map((f,j)=>`<div class="artifact-row"><span dir="auto">${ic('file')}${esc(f.path)}</span><button class="btn sm" data-agent-file="${j}">${ic('download')}تنزيل</button></div>`).join('')}</section>`:'';
   const acts=m.streaming?'':`<div class="acts"><button class="ic" data-act="copy" aria-label="نسخ">${ic('copy')}</button>${last?`<button class="ic" data-act="regen" aria-label="إعادة التوليد">${ic('refresh')}</button>`:''}<button class="ic" data-act="del" aria-label="حذف الرسالة">${ic('trash')}</button>${m.cost?`<small>${money(m.cost)}</small>`:''}</div>`;
-  return `<div class="msg a" data-i="${i}"><div class="who"><span>${esc(getModel(m.model).name)}</span><i></i></div>${think}${status}<div class="body md" dir="auto">${m.err?`<div class="err">${esc(m.err)}</div>`:''}<div class="media">${media}</div>${m.text?md(m.text):''}</div>${srcHTML(m)}${acts}</div>`}
+  return `<div class="msg a" data-i="${i}"><div class="who"><span>${esc(getModel(m.model).name)}</span><i></i></div>${think}${status}<div class="body md" dir="auto">${m.err?`<div class="err">${esc(m.err)}</div>`:''}<div class="media">${media}</div>${m.text?md(m.text):''}${artifacts}</div>${srcHTML(m)}${acts}</div>`}
 
 function renderThread(){
   if(!cur.msgs.length){
@@ -334,7 +344,60 @@ function history(c){
   return out;
 }
 
+const AGENT_TOOLS=[
+  {type:'function',function:{name:'write_file',description:'Create a new project file or replace a file in the agent workspace. Use relative paths such as index.html, src/app.js, or assets/style.css. The file is downloadable by the user; do not claim it was run or published.',parameters:{type:'object',additionalProperties:false,properties:{path:{type:'string',description:'Relative file path inside this chat workspace'},content:{type:'string',description:'Complete UTF-8 file contents'}},required:['path','content']}}},
+  {type:'function',function:{name:'list_files',description:'List files already present in the current chat workspace, including text files attached by the user.',parameters:{type:'object',additionalProperties:false,properties:{},required:[]}}},
+  {type:'function',function:{name:'read_file',description:'Read a text file from the current chat workspace to inspect or update it.',parameters:{type:'object',additionalProperties:false,properties:{path:{type:'string',description:'Relative file path'}},required:['path']}}}
+];
+function agentPath(v){const p=String(v||'').trim().replace(/\\/g,'/').replace(/^(\.\/)+/,'');if(!p||p.length>180||p.startsWith('/')||p.split('/').some(x=>!x||x==='.'||x==='..')||/[<>:"|?*\x00-\x1f]/.test(p))throw new Error('مسار الملف غير مسموح؛ استخدم مساراً نسبياً بسيطاً.');return p}
+function agentWorkspace(chat,a){const f={};for(const m of chat.msgs||[]){if(m.role==='user')for(const x of m.files||[])if(x.kind==='text'&&typeof x.data==='string')f[x.name]={path:x.name,content:x.data};for(const x of m.artifacts||[])if(x&&x.path&&typeof x.content==='string')f[x.path]={path:x.path,content:x.content}}for(const x of a.artifacts||[])f[x.path]={path:x.path,content:x.content};return f}
+function executeAgentTool(name,args,chat,a){
+  if(name==='list_files'){const f=agentWorkspace(chat,a);return JSON.stringify(Object.values(f).map(x=>({path:x.path,bytes:new TextEncoder().encode(x.content).length})).sort((x,y)=>x.path.localeCompare(y.path)))}
+  if(name==='read_file'){const p=agentPath(args.path),x=agentWorkspace(chat,a)[p];if(!x)throw new Error('الملف غير موجود في مساحة هذه المحادثة.');if(new TextEncoder().encode(x.content).length>150000)throw new Error('الملف أكبر من حد القراءة المباشرة.');return x.content}
+  if(name==='write_file'){
+    const p=agentPath(args.path);if(typeof args.content!=='string')throw new Error('محتوى الملف يجب أن يكون نصاً.');
+    const f=agentWorkspace(chat,a),bytes=new TextEncoder().encode(args.content).length;if(bytes>500000)throw new Error('الحد الأقصى لحجم الملف الواحد 500 كيلوبايت.');
+    if(!f[p]&&Object.keys(f).length>=20)throw new Error('تجاوز المشروع حد 20 ملفاً.');
+    const total=Object.entries(f).reduce((s,[k,v])=>s+(k===p?0:new TextEncoder().encode(v.content).length),0)+bytes;if(total>2000000)throw new Error('تجاوز مجموع الملفات حد 2 ميغابايت.');
+    a.artifacts=a.artifacts||[];const i=a.artifacts.findIndex(x=>x.path===p),item={path:p,content:args.content};if(i>=0)a.artifacts[i]=item;else a.artifacts.push(item);persist(chat);schedule(chat);return JSON.stringify({ok:true,path:p,bytes,message:'تم حفظ الملف في مساحة هذه المحادثة، ويمكن للمستخدم تنزيله.'})
+  }
+  throw new Error('الأداة المطلوبة غير متاحة.');
+}
+async function runAgentText(chat,a,mod){
+  const messages=history(chat),instruction='أنت وكيل تنفيذ داخل تطبيق odAi. عند طلب برمجة أو إنشاء مشروع، أنشئ الملفات الفعلية باستخدام write_file ولا تكتف بعرض الشيفرة في النص. أنشئ بنية مشروع عملية مع README عند الحاجة. قبل تعديل ملفات موجودة، استخدم list_files وread_file. الملفات تحفظ داخل مساحة هذه المحادثة فقط ويمكن للمستخدم تنزيلها، ولا تدّع تشغيلها أو نشرها أو الوصول إلى جهاز المستخدم. لا تنفذ أوامر نظام ولا تطلب أسراراً. بعد إنشاء الملفات اشرح بإيجاز ما أنشأته وكيفية تشغيله.';
+  if(messages[0]&&messages[0].role==='system')messages[0].content+='\n\n'+instruction;else messages.unshift({role:'system',content:instruction});
+  let toolCount=0;
+  for(let round=0;round<10;round++){
+    a.status=round?'الوكيل ينفذ الأدوات ويتابع…':'الوكيل يخطط وينشئ الملفات…';schedule(chat);
+    const body={model:mod.id,messages,stream:true,usage:{include:true},tools:AGENT_TOOLS,tool_choice:'auto',parallel_tool_calls:false};
+    const lv=chat.reasoning;if(lv==='off')body.reasoning={enabled:false};else if(lv!=='auto')body.reasoning={effort:lv};
+    if(cfg.temp!=='')body.temperature=+cfg.temp;if(cfg.maxTok)body.max_tokens=+cfg.maxTok;if(chat.web)body.plugins=[{id:'web'}];
+    const res=await fetch(API+'/chat/completions',{method:'POST',headers:hdr(),body:JSON.stringify(body),signal:ctl.signal});if(!res.ok){const err=await apiError(res);if(/tool|function/i.test(err.message||''))throw new Error('النموذج المختار لا يدعم استدعاء الأدوات في وضع الوكيل. اختر نموذجاً يدعم Tool Calling عبر OpenRouter.');throw err}
+    let text='',usage=0,usageSeen=false;const calls={};
+    await sse(res,j=>{
+      if(j.error)throw new Error(j.error.message||'خطأ من المزوّد');
+      const choice=j.choices&&j.choices[0]||{},d=choice.delta||{};
+      if(d.reasoning)a.reasoning+=d.reasoning;else if(Array.isArray(d.reasoning_details))for(const x of d.reasoning_details)if(x.text)a.reasoning+=x.text;
+      if(d.content){text+=d.content;a.text+=d.content}
+      for(const tc of d.tool_calls||[]){const ix=tc.index??Object.keys(calls).length,c=calls[ix]||(calls[ix]={id:'',type:'function',function:{name:'',arguments:''}});if(tc.id)c.id=tc.id;if(tc.type)c.type=tc.type;if(tc.function&&tc.function.name)c.function.name+=tc.function.name;if(tc.function&&tc.function.arguments)c.function.arguments+=tc.function.arguments}
+      if(j.usage&&!usageSeen){usage=+j.usage.cost||0;usageSeen=true}
+      addSources(a,d.annotations);if(j.usage||d.content||d.tool_calls)schedule(chat);
+    });
+    a.cost=(a.cost||0)+usage;
+    const batch=Object.keys(calls).sort((x,y)=>+x- +y).map(k=>calls[k]);if(!batch.length)break;for(const call of batch)if(!call.id)call.id=uid();
+    messages.push({role:'assistant',content:text||null,tool_calls:batch});
+    for(const call of batch){const id=call.id;let result;
+      if(toolCount++>=24)result=JSON.stringify({error:'بلغت الجلسة الحد الآمن لاستدعاء الأدوات.'});
+      else try{const args=JSON.parse(call.function.arguments||'{}');result=executeAgentTool(call.function.name,args,chat,a)}catch(e){result=JSON.stringify({error:(e&&e.message)||'تعذر تنفيذ الأداة.'})}
+      messages.push({role:'tool',tool_call_id:id,content:String(result)});schedule(chat);
+    }
+    if(round===9)a.text+='\n\nتوقفت جولات الوكيل عند الحد الوقائي. الملفات التي أُنشئت متاحة للتنزيل.';
+  }
+  if(a.artifacts&&a.artifacts.length)schedule(chat);
+}
+
 async function runText(chat,a,mod){
+  if(lastUser(chat)&&lastUser(chat).agent)return runAgentText(chat,a,mod);
   const body={model:mod.id,messages:history(chat),stream:true,usage:{include:true}};
   const lv=chat.reasoning;if(lv==='off')body.reasoning={enabled:false};else if(lv!=='auto')body.reasoning={effort:lv};
   if(cfg.temp!=='')body.temperature=+cfg.temp;if(cfg.maxTok)body.max_tokens=+cfg.maxTok;
@@ -375,7 +438,7 @@ async function runImage(chat,a,mod){
   if(c){for(const k of Object.keys(ILBL)){const d=c[k],v=opts.img[k];if(v&&d&&d.type==='enum'&&d.values.map(String).includes(String(v)))extra[k]=v}
     if(c.n&&c.n.max>1&&opts.img.n)extra.n=+opts.img.n}
   else if(opts.ar)extra.aspect_ratio=opts.ar;
-  const res=await fetchDeadline(API+'/images',{method:'POST',headers:hdr(),body:JSON.stringify({...base,...extra}),signal:ctl.signal},90000);
+  const res=await fetch(API+'/images',{method:'POST',headers:hdr(),body:JSON.stringify({...base,...extra}),signal:ctl.signal});
   if(!res.ok){
     const e1=await apiError(res);
     if(!c&&[400,404,405,422].includes(res.status)){
@@ -435,7 +498,6 @@ async function runVideo(chat,a,mod){
     await sleep(4000,ctl.signal);
     const r=await fetch(poll,{headers:hdr(),signal:ctl.signal});if(!r.ok)throw await apiError(r);j=await r.json();
     if(j.status==='completed')break;
-    if(Date.now()-t0>8*60e3)throw new Error('انتهت مهلة إنشاء الفيديو. أوقفنا الانتظار لحماية رصيدك.');
     if(['failed','cancelled','expired'].includes(j.status))throw new Error('فشل إنشاء الفيديو.'+(j.error?'\n'+(j.error.message||j.error):''));
   }
   a.cost=+((j.usage&&j.usage.cost)??j.cost)||0;
@@ -467,7 +529,7 @@ function send(){
   if(busy)return;const text=inp.value.trim(),imgs=pending.slice(),files=pfiles.slice();if(!text&&!imgs.length&&!files.length)return;
   if(!KEY){toast('أضف مفتاح OpenRouter أولاً');openSettings();return}
   const mod=curModel();if(!limitOk())return;
-  cur.msgs.push({id:uid(),role:'user',k:mod.kind,text,imgs,files,ts:Date.now()});
+  cur.msgs.push({id:uid(),role:'user',k:mod.kind,text,imgs,files,agent:mod.kind==='text'&&!!cfg.agentMode,ts:Date.now()});
   if(cur.msgs.length===1)cur.title=(text||(files[0]&&files[0].name)||'صورة').replace(/\s+/g,' ').slice(0,42);
   inp.value='';pending=[];pfiles=[];renderPending();autosize();renderEst();
   generate(cur);
@@ -502,6 +564,14 @@ scroller.addEventListener('scroll',()=>{stick=scroller.scrollHeight-scroller.scr
 thread.addEventListener('click',e=>{
   if(e.target.closest('[data-go]'))return openSettings();
   const vi=e.target.closest('.media img, .thumbs img');if(vi)return openViewer(vi.src);
+  const af=e.target.closest('[data-agent-file],[data-agent-zip]');if(af){const i=+af.closest('.msg').dataset.i,m=cur.msgs[i],files=m&&m.artifacts||[];if(af.hasAttribute('data-agent-zip')){if(files.length)downloadAgentFile(zipStored(files),'odai-agent-project.zip')}else{const f=files[+af.dataset.agentFile];if(f)downloadAgentFile(new Blob([f.content],{type:'text/plain;charset=utf-8'}),f.path.split('/').pop())}return}
+  const dl=e.target.closest('[data-code-download]');if(dl){const box=dl.closest('.code'),code=box.querySelector('code').textContent,lang=(dl.dataset.lang||'').toLowerCase();
+    const first=code.split(/\r?\n/).slice(0,3).join('\n'),match=first.match(/(?:filename|file|اسم الملف)\s*[:=]\s*["']?([\w.-]+\.[\w.-]+)["']?/i);
+    const ext={html:'html',htm:'html',css:'css',js:'js',javascript:'js',mjs:'mjs',ts:'ts',typescript:'ts',jsx:'jsx',tsx:'tsx',py:'py',python:'py',json:'json',md:'md',markdown:'md',xml:'xml',svg:'svg',yaml:'yml',yml:'yml',sh:'sh',bash:'sh',sql:'sql',java:'java',c:'c',cpp:'cpp','c++':'cpp',cs:'cs',go:'go',rust:'rs',rs:'rs',php:'php',rb:'rb',ruby:'rb',txt:'txt'}[lang]||'txt';
+    const index=[...box.parentElement.querySelectorAll('.code')].indexOf(box)+1;
+    let name=match?match[1]:`code-${index}.${ext}`;name=name.split(/[\\/]/).pop().replace(/[^\w.-]/g,'_');
+    const mime={html:'text/html',css:'text/css',js:'text/javascript',json:'application/json',svg:'image/svg+xml',xml:'application/xml',md:'text/markdown'}[ext]||'text/plain';
+    const url=URL.createObjectURL(new Blob([code],{type:mime+';charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),4000);toast('تم تنزيل '+name);return}
   const cb=e.target.closest('[data-copy]');if(cb)return copy(cb.closest('.code').querySelector('code').textContent);
   const a=e.target.closest('[data-act]');if(!a)return;
   const i=+a.closest('.msg').dataset.i,m=cur.msgs[i];
@@ -664,8 +734,9 @@ function limitOk(){
 inp.addEventListener('input',renderEst);
 $('#opts').addEventListener('change',renderEst);
 renderOpts=(o=>function(){o();renderEst()})(renderOpts);
-renderTop=(o=>function(){o();const w=$('#webBtn');w.hidden=curModel().kind!=='text';w.classList.toggle('on',!!cur.web);renderEst()})(renderTop);
+renderTop=(o=>function(){o();const w=$('#webBtn');w.hidden=curModel().kind!=='text';w.classList.toggle('on',!!cur.web);const ag=$('#agentBtn');ag.hidden=curModel().kind!=='text';ag.classList.toggle('on',!!cfg.agentMode);ag.setAttribute('aria-pressed',String(!!cfg.agentMode));renderEst()})(renderTop);
 $('#webBtn').onclick=()=>{cur.web=!cur.web;if(chats.includes(cur))persist(cur);renderTop();toast(cur.web?'البحث في الإنترنت: مفعّل (قد تُضاف رسوم بحث)':'البحث في الإنترنت: متوقف')};
+$('#agentBtn').onclick=()=>{cfg.agentMode=!cfg.agentMode;saveCfg();renderTop();toast(cfg.agentMode?'وضع الوكيل مفعّل: يمكنه إنشاء ملفات وتنزيلها':'وضع الوكيل متوقف')};
 
 /* --- تقرير الصرف --- */
 function openReport(){
@@ -915,7 +986,7 @@ thread.addEventListener('click',e=>{
   }else if(act==='anim'){
     const vm=(getModel(cfg.lastVid||'').kind==='video'&&cfg.lastVid)||(models.find(x=>x.kind==='video')||{}).id;
     if(!vm){toast('لا يوجد نموذج فيديو متاح');return}
-    setModel(vm);pending=[src];pfiles=[];renderPending();renderEst();inp.focus();toast('اكتب وصف الحركة ثم أرسل');
+    setModel(vm);pending=[src];pfiles=[];renderPending();renderEst();inp.focus();toast('أُرفقت الصورة الأصلية؛ اكتب وصف الحركة ثم أرسل.');
   }else if(act==='again'){
     const u=cur.msgs.slice(0,i).reverse().find(x=>x.role==='user');if(!u)return;
     if(mod.kind==='image')setModel(mod.id);
